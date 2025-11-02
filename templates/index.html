@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Cứu Map Mini – Theo dõi vị trí trực tiếp</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+<div id="container">
+  <div id="sidebar">
+    <h2>📋 Danh sách cứu trợ</h2>
+    <div id="filterBar">
+      <button class="active" onclick="filterPoints('all')">Tất cả</button>
+      <button onclick="filterPoints('help')">🆘 Cần cứu trợ</button>
+      <button onclick="filterPoints('donor')">💚 Mạnh Thường Quân</button>
+      <button onclick="filterPoints('donor_inactive')">💤 Ngắt kết nối</button>
+    </div>
+    <div id="searchBox">
+      <input id="search" placeholder="🔍 Tìm địa điểm (Quận, Tỉnh...)" />
+      <button onclick="searchLocation()">Tìm</button>
+    </div>
+    <div id="list"></div>
+  </div>
+  <div id="map">
+    <button id="menuBtn" onclick="toggleSidebar()">☰</button>
+  </div>
+</div>
+
+<div class="action-buttons">
+  <button class="btn-main btn-help" onclick="openForm('help')">🆘 Tôi cần trợ giúp</button>
+  <button class="btn-main btn-donor" onclick="openForm('donor')">🤝 Tôi là Mạnh Thường Quân</button>
+</div>
+
+<div id="helpForm">
+  <h3 id="formTitle" style="margin-top:0">Gửi thông tin</h3>
+  <input id="name" placeholder="👤 Họ và tên (chỉ với Mạnh Thường Quân)" style="display:none" />
+  <input id="phone" placeholder="📞 Số điện thoại (bắt buộc)" required />
+  <textarea id="note" placeholder="✏️ Ghi chú (tùy chọn)" rows="2"></textarea>
+  <input id="address" placeholder="🏠 Địa chỉ (tùy chọn)" />
+  <div id="stopShareContainer" style="display:none;">
+    <button id="stopShareBtn" class="btn-stop" onclick="stopSharing()">⛔ Dừng chia sẻ</button>
+  </div>
+  <button onclick="submitForm()">Gửi</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, formType = "help";
+let myPhone = null;
+let donorMarkers = {};
+const markers = L.layerGroup();
+const listDiv = document.getElementById("list");
+let allPoints = [];
+
+const iconHelp = L.icon({
+  iconUrl: "https://cdn-icons-png.flaticon.com/512/684/684908.png",
+  iconSize: [28, 28], iconAnchor: [14, 28],
+});
+const iconDonor = L.icon({
+  iconUrl: "https://cdn-icons-png.flaticon.com/512/4470/4470310.png",
+  iconSize: [28, 28], iconAnchor: [14, 28],
+});
+const iconInactive = L.icon({
+  iconUrl: "https://cdn-icons-png.flaticon.com/512/1828/1828859.png",
+  iconSize: [28, 28], iconAnchor: [14, 28],
+});
+const iconUser = L.icon({
+  iconUrl: "https://cdn-icons-png.flaticon.com/512/64/64113.png",
+  iconSize: [28, 28], iconAnchor: [14, 28],
+});
+
+function initMap(lat=16, lon=108, zoom=6) {
+  map = L.map('map').setView([lat, lon], zoom);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors & CartoDB'
+  }).addTo(map);
+  markers.addTo(map);
+}
+
+function renderPoints(filter="all") {
+  markers.clearLayers(); listDiv.innerHTML = "";
+  const data = filter === "all" ? allPoints : allPoints.filter(p => p.type === filter);
+
+  data.forEach(d => {
+    let label = "";
+    let colorClass = "";
+    let icon = iconHelp;
+
+    if (d.type === "help") {
+      label = "🆘 Cần cứu trợ";
+      colorClass = "help";
+      icon = iconHelp;
+    } else if (d.type === "donor") {
+      label = "💚 Mạnh Thường Quân";
+      colorClass = "donor";
+      icon = iconDonor;
+    } else if (d.type === "donor_inactive") {
+      label = "💤 Mạnh Thường Quân (đang ngắt kết nối)";
+      colorClass = "inactive";
+      icon = iconInactive;
+    }
+
+    const item = document.createElement("div");
+    item.className = "point " + colorClass;
+    item.innerHTML = `<b>${label}</b><br>${d.note || "(Không có ghi chú)"}<br>
+                      <small>📞 ${d.phone || "(chưa có)"}<br>${d.address || ""}</small>`;
+    item.onclick = () => map.setView([d.lat, d.lon], 15);
+    listDiv.appendChild(item);
+
+    L.marker([d.lat, d.lon], { icon })
+      .addTo(markers)
+      .bindPopup(`<b>${label}</b><br>${d.note || "(Không có ghi chú)"}<br>
+                  📞 ${d.phone || "(chưa có)"}<br>${d.address || ""}`);
+  });
+}
+
+async function load() {
+  const res = await fetch("/api/points");
+  allPoints = await res.json();
+  renderPoints();
+}
+
+function filterPoints(type) {
+  document.querySelectorAll("#filterBar button").forEach(btn => btn.classList.remove("active"));
+  const btn = document.querySelector(`#filterBar button[onclick*="${type}"]`);
+  if (btn) btn.classList.add("active");
+  renderPoints(type);
+}
+
+function openForm(type) {
+  formType = type;
+  document.getElementById("name").style.display = type === "donor" ? "block" : "none";
+  document.getElementById("helpForm").style.display = "block";
+  document.getElementById("stopShareContainer").style.display = type === "donor" ? "block" : "none";
+  document.getElementById("formTitle").innerText =
+    type === "donor" ? "💚 Đăng ký Mạnh Thường Quân" : "🆘 Gửi yêu cầu cứu trợ";
+}
+
+async function submitForm() {
+  const name = document.getElementById("name").value.trim();
+  const phone = document.getElementById("phone").value.trim();
+  const note = document.getElementById("note").value.trim();
+  const addressInput = document.getElementById("address").value.trim();
+
+  if (!phone) return alert("⚠️ Nhập số điện thoại!");
+  if (formType === "donor" && !name) return alert("⚠️ Nhập họ tên!");
+
+  let lat=null, lon=null, address=addressInput;
+  if (addressInput) {
+    const geo = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressInput)}&limit=1&countrycodes=vn`);
+    const r = await geo.json();
+    if (r.length>0){lat=r[0].lat;lon=r[0].lon;}
+  }
+  if (!lat || !lon && navigator.geolocation){
+    const pos = await new Promise(resolve => navigator.geolocation.getCurrentPosition(resolve));
+    lat=pos.coords.latitude;lon=pos.coords.longitude;
+  }
+  await fetch("/api/points", {
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ lat, lon, note, phone, address, type:formType, name })
+  });
+  if (formType==="donor"){ myPhone=phone; startLiveTracking(); }
+  document.getElementById("helpForm").style.display="none";
+  await load();
+  alert(formType==='donor'?"💚 Đã bật chia sẻ live":"🆘 Gửi cứu trợ thành công!");
+}
+
+async function stopSharing(){
+  if(!myPhone) return alert("⚠️ Bạn chưa bật chia sẻ!");
+  await fetch("/api/stop_live", {
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({phone:myPhone})
+  });
+  alert("⛔ Đã dừng chia sẻ!");
+  myPhone=null;
+  await load();
+}
+
+async function loadLiveDonors(){
+  const res = await fetch("/api/live_donors");
+  const donors = await res.json();
+  for(const p in donorMarkers){ map.removeLayer(donorMarkers[p]); }
+  donorMarkers={};
+  donors.forEach(d=>{
+    const marker=L.marker([d.lat,d.lon],{icon:iconDonor}).addTo(map)
+      .bindPopup(`💚 ${d.name||'Ẩn danh'}<br>📞 ${d.phone}<br>${d.address||''}`);
+    donorMarkers[d.phone]=marker;
+  });
+}
+
+async function startLiveTracking(){
+  if(navigator.geolocation){
+    navigator.geolocation.watchPosition(async pos=>{
+      const {latitude,longitude}=pos.coords;
+      await fetch("/api/live_update",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({phone:myPhone,lat:latitude,lon:longitude})
+      });
+    });
+  }
+}
+
+async function searchLocation(){
+  const keyword=document.getElementById("search").value;if(!keyword)return;
+  const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(keyword)}&addressdetails=1&limit=1&countrycodes=vn`);
+  const data=await res.json();
+  if(data.length>0){const {lat,lon,display_name}=data[0];map.setView([lat,lon],14);
+  L.popup().setLatLng([lat,lon]).setContent(`📍 ${display_name}`).openOn(map);}
+}
+
+window.onload=async()=>{
+  initMap();await load();
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(pos=>{
+      map.setView([pos.coords.latitude,pos.coords.longitude],13);
+      L.marker([pos.coords.latitude,pos.coords.longitude],{icon:iconUser})
+        .addTo(map).bindPopup("📍 Vị trí của bạn").openPopup();
+    });
+  }
+  setInterval(loadLiveDonors,10000);
+};
+
+function toggleSidebar() {
+  const sidebar = document.getElementById("sidebar");
+  sidebar.classList.toggle("open");
+
+  // Thêm nút đóng X khi sidebar mở
+  if (!document.getElementById("closeSidebar")) {
+    const closeBtn = document.createElement("button");
+    closeBtn.id = "closeSidebar";
+    closeBtn.textContent = "×";
+    closeBtn.onclick = () => sidebar.classList.remove("open");
+    sidebar.appendChild(closeBtn);
+  }
+}
+
+</script>
+</body>
+</html>
